@@ -1,14 +1,11 @@
 import os
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 from google import genai
 from google.genai import types
-
-# ============================================================
-# My AI Platform
-# ============================================================
 
 st.set_page_config(
     page_title="My AI Platform",
@@ -17,108 +14,166 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+st.markdown(
+    """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
-
-html, body, [class*="css"] {
-    font-family: "Cairo", sans-serif;
-}
-
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"] { font-family: "Cairo", sans-serif; }
 .stApp {
     background:
-        radial-gradient(circle at 15% 10%, rgba(70,90,180,.18), transparent 30%),
-        radial-gradient(circle at 85% 20%, rgba(130,60,180,.15), transparent 30%),
-        #090b12;
+      radial-gradient(circle at 12% 5%, rgba(91,103,196,.18), transparent 28%),
+      radial-gradient(circle at 88% 8%, rgba(147,75,180,.13), transparent 28%),
+      #0b0d12;
 }
-
 .block-container {
-    max-width: 1250px;
-    padding-top: 1.5rem;
-    padding-bottom: 3rem;
+    max-width: 1050px;
+    padding-top: 1rem;
+    padding-bottom: 7rem;
 }
-
-.hero {
-    padding: 28px;
-    border-radius: 24px;
-    background: linear-gradient(135deg, rgba(35,42,70,.96), rgba(18,20,35,.96));
-    border: 1px solid rgba(255,255,255,.08);
-    margin-bottom: 20px;
+[data-testid="stSidebar"] {
+    background: #101218;
+    border-right: 1px solid rgba(255,255,255,.07);
 }
-
-.hero h1 {
-    font-size: 40px;
-    margin: 0 0 6px 0;
+[data-testid="stChatMessage"] {
+    border: 0;
+    border-radius: 18px;
+    padding: .45rem .7rem;
+    margin: .35rem 0;
 }
-
-.hero p {
-    color: #b9bfd4;
-    font-size: 17px;
-    margin: 0;
+.chat-title {
+    text-align: center;
+    padding: 12px 0 18px;
 }
-
-.badge {
+.chat-title h1 { font-size: 27px; margin: 0; }
+.chat-title p { color: #9da4b7; margin: 3px 0 0; }
+.welcome {
+    max-width: 760px;
+    margin: 13vh auto 5vh;
+    text-align: center;
+}
+.welcome h1 { font-size: 40px; margin-bottom: 8px; }
+.welcome p { color: #9da4b7; font-size: 17px; }
+.pill {
     display: inline-block;
-    padding: 5px 11px;
-    margin: 8px 5px 0 0;
-    border-radius: 18px;
-    background: rgba(100,120,255,.15);
-    border: 1px solid rgba(100,120,255,.25);
-    color: #d7dbff;
+    padding: 6px 12px;
+    margin: 5px 3px;
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 999px;
+    color: #cdd2df;
+    background: rgba(255,255,255,.035);
 }
-
-div[data-testid="stChatMessage"] {
-    border-radius: 18px;
-    margin-bottom: 8px;
+.side-brand {
+    font-size: 22px;
+    font-weight: 800;
+    padding: 4px 0 10px;
 }
-
-.api-box {
-    padding: 16px;
-    border-radius: 16px;
-    background: rgba(255,255,255,.04);
-    border: 1px solid rgba(255,255,255,.08);
-    margin-bottom: 15px;
-}
+.small-muted { color: #8e95a8; font-size: 12px; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# ------------------------------------------------------------
-# Session state
-# ------------------------------------------------------------
+TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.8-flash")
+IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+SYSTEM_PROMPT = """
+You are My AI, a helpful, intelligent and friendly general-purpose AI assistant.
+Answer accurately and clearly. Match the user's language.
+If the user writes Arabic, answer in natural Arabic unless they ask for English.
+Use Markdown when it improves readability.
+For code, always use fenced code blocks with the correct language when possible.
+Never claim that you performed an action you did not actually perform.
+When a file is attached, use it as evidence and explain what you found.
+"""
+
+def new_chat():
+    return {"title": "محادثة جديدة", "messages": []}
+
+def make_title(text):
+    clean = " ".join(text.strip().split())
+    return clean[:34] + ("…" if len(clean) > 34 else "")
+
+def get_secret_key():
+    try:
+        return st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        return None
+
+@st.cache_resource(show_spinner=False)
+def make_client(api_key):
+    return genai.Client(api_key=api_key)
+
+def build_history(messages):
+    history = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        history.append(
+            types.Content(
+                role=role,
+                parts=[types.Part(text=msg["content"])],
+            )
+        )
+    return history
+
+def upload_for_gemini(client, uploaded):
+    suffix = Path(uploaded.name).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
+        f.write(uploaded.getbuffer())
+        path = f.name
+    try:
+        return client.files.upload(file=path)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+if "chats" not in st.session_state:
+    chat_id = str(uuid4())
+    st.session_state.chats = {chat_id: new_chat()}
+    st.session_state.active_chat = chat_id
+
+if "active_chat" not in st.session_state or st.session_state.active_chat not in st.session_state.chats:
+    st.session_state.active_chat = next(iter(st.session_state.chats))
 
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
 
-# ------------------------------------------------------------
-# API key
-# ------------------------------------------------------------
+secret_key = get_secret_key()
+api_key = secret_key or os.environ.get("GEMINI_API_KEY") or st.session_state.api_key
 
-secret_key = None
-try:
-    secret_key = st.secrets.get("GEMINI_API_KEY")
-except Exception:
-    secret_key = None
-
-api_key = (
-    secret_key
-    or os.environ.get("GEMINI_API_KEY")
-    or st.session_state.api_key
-)
-
-# ------------------------------------------------------------
-# Sidebar
-# ------------------------------------------------------------
+chat = st.session_state.chats[st.session_state.active_chat]
+messages = chat["messages"]
 
 with st.sidebar:
-    st.markdown("# 🤖 My AI")
-    st.caption("منصة ذكاء اصطناعي متعددة الأدوات")
+    st.markdown('<div class="side-brand">🤖 My AI</div>', unsafe_allow_html=True)
+    st.caption("مساعد ذكي متعدد الأدوات")
 
-    if st.button("➕ محادثة جديدة", use_container_width=True):
-        st.session_state.messages = []
+    if st.button("✚ محادثة جديدة", use_container_width=True, type="primary"):
+        new_id = str(uuid4())
+        st.session_state.chats[new_id] = new_chat()
+        st.session_state.active_chat = new_id
         st.rerun()
+
+    st.divider()
+    st.markdown("**محادثاتك**")
+
+    for cid, item in list(st.session_state.chats.items()):
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            if st.button(
+                ("● " if cid == st.session_state.active_chat else "") + item["title"],
+                key=f"open_{cid}",
+                use_container_width=True,
+            ):
+                st.session_state.active_chat = cid
+                st.rerun()
+        with c2:
+            if len(st.session_state.chats) > 1:
+                if st.button("×", key=f"delete_{cid}", help="حذف المحادثة"):
+                    del st.session_state.chats[cid]
+                    st.session_state.active_chat = next(iter(st.session_state.chats))
+                    st.rerun()
 
     st.divider()
 
@@ -127,380 +182,201 @@ with st.sidebar:
             "🔑 Gemini API Key",
             value=st.session_state.api_key,
             type="password",
-            placeholder="ألصقي مفتاح Gemini هنا",
-            help="يمكنك وضع المفتاح هنا أو إضافته في Streamlit Secrets.",
+            placeholder="ألصقي المفتاح هنا",
         )
-        if key_input:
+        if key_input != st.session_state.api_key:
             st.session_state.api_key = key_input
             api_key = key_input
 
     st.divider()
 
-    temperature = st.slider(
-        "🎨 مستوى الإبداع",
-        min_value=0.0,
-        max_value=1.5,
-        value=0.7,
-        step=0.1,
+    mode = st.selectbox(
+        "الأداة",
+        ["🤖 تلقائي / Chat", "🖼️ توليد صورة", "📎 تحليل ملف"],
     )
 
+    temperature = st.slider("الإبداع", 0.0, 1.5, 0.7, 0.1)
+
     language = st.selectbox(
-        "🌐 لغة الرد",
+        "لغة الرد",
         ["تلقائي", "العربية", "English"],
     )
 
-    st.caption("Gemini 3.8 Flash")
+    st.divider()
+    st.markdown("**النماذج**")
+    st.caption(f"Text: {TEXT_MODEL}")
+    st.caption(f"Image: {IMAGE_MODEL}")
 
-# ------------------------------------------------------------
-# Header
-# ------------------------------------------------------------
+    if st.button("🗑️ مسح رسائل المحادثة", use_container_width=True):
+        chat["messages"] = []
+        chat["title"] = "محادثة جديدة"
+        st.rerun()
 
-st.markdown("""
-<div class="hero">
-    <h1>🤖 My AI Platform</h1>
-    <p>مساعدك الذكي للمحادثة وتحليل الملفات والصور والصوت والفيديو.</p>
-    <span class="badge">💬 محادثة</span>
-    <span class="badge">📎 ملفات</span>
-    <span class="badge">🖼️ صور</span>
-    <span class="badge">🎙️ صوت</span>
-    <span class="badge">🎬 فيديو</span>
+st.markdown(
+    f"""
+<div class="chat-title">
+  <h1>🤖 {chat["title"]}</h1>
+  <p>محادثة ذكية · ملفات · صور · صوت · فيديو</p>
 </div>
-""", unsafe_allow_html=True)
-
-SYSTEM = (
-    "أنت My AI، مساعد ذكاء اصطناعي مفيد وودود. "
-    "أجب بوضوح وبشكل عملي. "
-    "إذا كان السؤال بالعربية فأجب بالعربية. "
-    "لا تدّعي أنك نفذت شيئاً لم تنفذه فعلياً."
+""",
+    unsafe_allow_html=True,
 )
 
-# ------------------------------------------------------------
-# Tabs
-# ------------------------------------------------------------
+with st.expander("📎 إرفاق ملفات وصور وصوت وفيديو", expanded=False):
+    attachments = st.file_uploader(
+        "يمكنك رفع ملف أو أكثر ثم كتابة طلبك في مربع المحادثة",
+        type=[
+            "pdf", "txt", "csv", "md", "docx",
+            "png", "jpg", "jpeg", "webp",
+            "mp3", "wav", "m4a", "ogg",
+            "mp4", "mov", "avi", "webm",
+        ],
+        accept_multiple_files=True,
+        key="chat_attachments",
+    )
+    if attachments:
+        st.success("تم إرفاق: " + "، ".join(f.name for f in attachments))
 
-tab_chat, tab_files, tab_image, tab_audio, tab_video = st.tabs(
-    ["💬 الشات", "📎 الملفات", "🖼️ الصور", "🎙️ الصوت", "🎬 الفيديو"]
-)
+if not messages:
+    st.markdown(
+        """
+<div class="welcome">
+  <h1>كيف أقدر أساعدك؟</h1>
+  <p>اكتبي أي سؤال، ارفعي ملفاً، أو اختاري توليد صورة.</p>
+  <span class="pill">💬 أسئلة ومحادثة</span>
+  <span class="pill">📄 PDF وملفات</span>
+  <span class="pill">🖼️ صور</span>
+  <span class="pill">🎙️ صوت</span>
+  <span class="pill">🎬 فيديو</span>
+  <span class="pill">💻 كود وبرمجة</span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
-# ============================================================
-# CHAT
-# ============================================================
+for msg in messages:
+    with st.chat_message(msg["role"]):
+        if msg.get("image_bytes"):
+            st.image(msg["image_bytes"], use_container_width=True)
+        if msg.get("content"):
+            st.markdown(msg["content"])
+        if msg.get("files"):
+            st.caption("📎 " + " · ".join(msg["files"]))
 
-with tab_chat:
-    st.subheader("💬 المحادثة الذكية")
+prompt = st.chat_input("اكتبي رسالتك هنا…")
+
+if prompt:
+    user_files = attachments if "attachments" in locals() else []
+
+    if not messages:
+        chat["title"] = make_title(prompt)
+
+    messages.append({
+        "role": "user",
+        "content": prompt,
+        "files": [f.name for f in user_files],
+    })
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+        if user_files:
+            st.caption("📎 " + " · ".join(f.name for f in user_files))
 
     if not api_key:
-        st.markdown(
-            '<div class="api-box">🔑 <b>للبدء:</b> ضعي Gemini API Key في القائمة الجانبية، ثم اكتبي رسالتك في مربع المحادثة بالأسفل.</div>',
-            unsafe_allow_html=True,
-        )
-
-    # Show conversation
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # IMPORTANT: chat input is always visible
-    prompt = st.chat_input("اكتبي رسالتك هنا...")
-
-    if prompt:
-        st.session_state.messages.append(
-            {"role": "user", "content": prompt}
-        )
-
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
+        answer = "🔑 أضيفي Gemini API Key من القائمة الجانبية أولاً، ثم أرسلي الرسالة مرة أخرى."
+        messages.append({"role": "assistant", "content": answer})
         with st.chat_message("assistant"):
-            if not api_key:
-                answer = "🔑 أضيفي Gemini API Key أولاً من القائمة الجانبية، ثم أرسلي رسالتك مرة أخرى."
-                st.warning(answer)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
-            else:
-                try:
-                    client = genai.Client(api_key=api_key)
+            st.warning(answer)
+    else:
+        client = make_client(api_key)
 
-                    contents = []
-                    for msg in st.session_state.messages:
-                        role = "user" if msg["role"] == "user" else "model"
-                        contents.append(
-                            types.Content(
-                                role=role,
-                                parts=[types.Part(text=msg["content"])],
-                            )
+        if mode == "🖼️ توليد صورة":
+            with st.chat_message("assistant"):
+                try:
+                    with st.spinner("🎨 جاري إنشاء الصورة…"):
+                        response = client.models.generate_content(
+                            model=IMAGE_MODEL,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_modalities=["TEXT", "IMAGE"],
+                            ),
                         )
 
-                    instruction = SYSTEM
+                    image_bytes = None
+                    text_parts = []
+
+                    for part in response.parts:
+                        if getattr(part, "inline_data", None) is not None:
+                            image_bytes = part.inline_data.data
+                        elif getattr(part, "text", None):
+                            text_parts.append(part.text)
+
+                    if image_bytes:
+                        st.image(image_bytes, use_container_width=True)
+                        caption = "\n\n".join(text_parts)
+                        if caption:
+                            st.markdown(caption)
+                        messages.append({
+                            "role": "assistant",
+                            "content": caption or "تم إنشاء الصورة.",
+                            "image_bytes": image_bytes,
+                        })
+                    else:
+                        answer = response.text or "لم يتم إرجاع صورة."
+                        st.markdown(answer)
+                        messages.append({"role": "assistant", "content": answer})
+
+                except Exception as e:
+                    answer = f"تعذر إنشاء الصورة: {e}"
+                    st.error(answer)
+                    messages.append({"role": "assistant", "content": answer})
+
+        else:
+            with st.chat_message("assistant"):
+                try:
+                    contents = build_history(messages[:-1])
+
+                    if user_files:
+                        for uploaded in user_files:
+                            with st.spinner(f"📎 رفع {uploaded.name}…"):
+                                contents.append(upload_for_gemini(client, uploaded))
+
+                    final_prompt = prompt
+                    if user_files:
+                        final_prompt = (
+                            "Analyze the attached files as part of this conversation. "
+                            "Use the files as evidence where relevant.\n\n" + prompt
+                        )
 
                     if language == "العربية":
-                        instruction += "\nاستخدم العربية في الرد."
+                        instruction = SYSTEM_PROMPT + "\nRespond in Arabic."
                     elif language == "English":
-                        instruction += "\nAnswer in English."
+                        instruction = SYSTEM_PROMPT + "\nRespond in English."
+                    else:
+                        instruction = SYSTEM_PROMPT
 
-                    with st.spinner("🤖 أفكر..."):
+                    with st.spinner("🤖 يفكر…"):
                         response = client.models.generate_content(
-                            model="gemini-3.8-flash",
-                            contents=contents,
+                            model=TEXT_MODEL,
+                            contents=contents + [final_prompt],
                             config=types.GenerateContentConfig(
                                 temperature=temperature,
                                 system_instruction=instruction,
                             ),
                         )
 
-                    answer = response.text or "لم يصلني نص من النموذج."
+                    answer = response.text or "لم يصلني رد من النموذج."
                     st.markdown(answer)
-
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": answer}
-                    )
+                    messages.append({"role": "assistant", "content": answer})
 
                 except Exception as e:
-                    error_text = str(e)
-                    st.error(
-                        "تعذر الاتصال بـ Gemini.\n\n"
-                        f"التفاصيل: {error_text}"
-                    )
+                    answer = f"حدث خطأ أثناء الاتصال بالنموذج. التفاصيل: {e}"
+                    st.error(answer)
+                    messages.append({"role": "assistant", "content": answer})
 
-# ============================================================
-# FILES
-# ============================================================
-
-with tab_files:
-    st.subheader("📎 تحليل الملفات")
-
-    uploaded = st.file_uploader(
-        "ارفعي ملفاً",
-        type=[
-            "pdf", "png", "jpg", "jpeg", "webp",
-            "txt", "csv",
-            "mp3", "wav", "m4a", "ogg",
-            "mp4", "mov", "avi", "webm"
-        ],
-        key="general_file",
-    )
-
-    if uploaded:
-        st.success(f"تم اختيار: {uploaded.name}")
-
-        prompt = st.text_area(
-            "ماذا تريدين من الملف؟",
-            "حلل الملف واشرح أهم المعلومات الموجودة فيه.",
-            key="general_file_prompt",
-        )
-
-        if st.button(
-            "🧠 تحليل الملف",
-            type="primary",
-            use_container_width=True,
-        ):
-            if not api_key:
-                st.error("أضيفي Gemini API Key أولاً.")
-            else:
-                path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        delete=False,
-                        suffix=Path(uploaded.name).suffix,
-                    ) as f:
-                        f.write(uploaded.getbuffer())
-                        path = f.name
-
-                    client = genai.Client(api_key=api_key)
-                    gf = client.files.upload(file=path)
-
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=[prompt, gf],
-                    )
-
-                    st.markdown("### النتيجة")
-                    st.markdown(response.text or "لم يصل رد.")
-
-                except Exception as e:
-                    st.error(f"تعذر تحليل الملف: {e}")
-
-                finally:
-                    if path:
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-
-# ============================================================
-# IMAGE
-# ============================================================
-
-with tab_image:
-    st.subheader("🖼️ توليد الصور")
-
-    image_prompt = st.text_area(
-        "اكتبي وصف الصورة",
-        placeholder="مثال: درون توصيل في مدينة سعودية مستقبلية بأسلوب سينمائي واقعي...",
-        key="image_prompt",
-    )
-
-    if st.button(
-        "🎨 إنشاء الصورة",
-        type="primary",
-        use_container_width=True,
-    ):
-        if not api_key:
-            st.error("أضيفي Gemini API Key أولاً.")
-        elif not image_prompt.strip():
-            st.warning("اكتبي وصف الصورة أولاً.")
-        else:
-            try:
-                client = genai.Client(api_key=api_key)
-
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash-image",
-                    contents=image_prompt,
-                    config=types.GenerateContentConfig(
-                        response_modalities=["IMAGE", "TEXT"]
-                    ),
-                )
-
-                found = False
-
-                for part in response.parts:
-                    if part.inline_data is not None:
-                        st.image(
-                            part.as_image(),
-                            use_container_width=True,
-                        )
-                        found = True
-
-                if not found:
-                    st.warning("لم يتم إرجاع صورة من النموذج.")
-
-            except Exception as e:
-                st.error(f"تعذر إنشاء الصورة: {e}")
-
-# ============================================================
-# AUDIO
-# ============================================================
-
-with tab_audio:
-    st.subheader("🎙️ تحليل الصوت")
-
-    audio = st.file_uploader(
-        "ارفعي تسجيلًا صوتيًا",
-        type=["mp3", "wav", "m4a", "ogg"],
-        key="audio_file",
-    )
-
-    if audio:
-        st.audio(audio)
-
-        prompt = st.text_area(
-            "المطلوب",
-            "فرغ الكلام الموجود في التسجيل ثم لخص أهم النقاط.",
-            key="audio_prompt",
-        )
-
-        if st.button(
-            "🎙️ تحليل الصوت",
-            type="primary",
-            use_container_width=True,
-        ):
-            if not api_key:
-                st.error("أضيفي Gemini API Key أولاً.")
-            else:
-                path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        delete=False,
-                        suffix=Path(audio.name).suffix,
-                    ) as f:
-                        f.write(audio.getbuffer())
-                        path = f.name
-
-                    client = genai.Client(api_key=api_key)
-                    af = client.files.upload(file=path)
-
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=[prompt, af],
-                    )
-
-                    st.markdown("### 📝 النتيجة")
-                    st.markdown(response.text or "لم يصل رد.")
-
-                except Exception as e:
-                    st.error(f"تعذر تحليل الصوت: {e}")
-
-                finally:
-                    if path:
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-
-# ============================================================
-# VIDEO
-# ============================================================
-
-with tab_video:
-    st.subheader("🎬 تحليل الفيديو")
-
-    video = st.file_uploader(
-        "ارفعي فيديو",
-        type=["mp4", "mov", "avi", "webm"],
-        key="video_file",
-    )
-
-    if video:
-        st.video(video)
-
-        prompt = st.text_area(
-            "المطلوب",
-            "حلل الفيديو، صف أهم المشاهد، واكتب ملخصاً احترافياً.",
-            key="video_prompt",
-        )
-
-        if st.button(
-            "🎬 تحليل الفيديو",
-            type="primary",
-            use_container_width=True,
-        ):
-            if not api_key:
-                st.error("أضيفي Gemini API Key أولاً.")
-            else:
-                path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        delete=False,
-                        suffix=Path(video.name).suffix,
-                    ) as f:
-                        f.write(video.getbuffer())
-                        path = f.name
-
-                    client = genai.Client(api_key=api_key)
-                    vf = client.files.upload(file=path)
-
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=[prompt, vf],
-                    )
-
-                    st.markdown("### 🎬 النتيجة")
-                    st.markdown(response.text or "لم يصل رد.")
-
-                except Exception as e:
-                    st.error(f"تعذر تحليل الفيديو: {e}")
-
-                finally:
-                    if path:
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-
-# ------------------------------------------------------------
-# Footer
-# ------------------------------------------------------------
-
-st.divider()
-st.caption("🤖 My AI Platform · Powered by Gemini")
+st.markdown(
+    '<div class="small-muted" style="text-align:center;margin-top:30px;">'
+    'My AI Platform · Gemini API · المحادثات محفوظة داخل جلسة المتصفح'
+    '</div>',
+    unsafe_allow_html=True,
+)
