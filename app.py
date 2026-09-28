@@ -222,6 +222,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if not api_key:
+    st.markdown(
+        """
+        <div style="padding:16px 18px;border:1px solid rgba(255,193,7,.25);
+        background:rgba(255,193,7,.08);border-radius:16px;margin:10px 0 16px;">
+        <b>🔑 مفتاح Gemini مطلوب</b><br>
+        <span style="color:#b9bfd4;">ضعي المفتاح هنا مرة واحدة، وبعدها سيعمل الشات مباشرة.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    main_key = st.text_input(
+        "Gemini API Key",
+        value=st.session_state.api_key,
+        type="password",
+        placeholder="AIza... الصقي المفتاح هنا",
+        label_visibility="visible",
+    )
+    if main_key and main_key != st.session_state.api_key:
+        st.session_state.api_key = main_key
+        st.rerun()
+
 with st.expander("📎 إرفاق ملفات وصور وصوت وفيديو", expanded=False):
     attachments = st.file_uploader(
         "يمكنك رفع ملف أو أكثر ثم كتابة طلبك في مربع المحادثة",
@@ -263,9 +285,18 @@ for msg in messages:
         if msg.get("files"):
             st.caption("📎 " + " · ".join(msg["files"]))
 
-prompt = st.chat_input("اكتبي رسالتك هنا…")
+with st.form("message_composer", clear_on_submit=True):
+    st.markdown("**💬 رسالتك**")
+    prompt = st.text_area(
+        "اكتبي رسالتك هنا…",
+        height=90,
+        placeholder="اكتبي أي شيء تريدين مني مساعدتك فيه...",
+        label_visibility="collapsed",
+    )
+    send = st.form_submit_button("➤ إرسال", use_container_width=True, type="primary")
 
-if prompt:
+if send and prompt.strip():
+
     user_files = attachments if "attachments" in locals() else []
 
     if not messages:
@@ -283,10 +314,7 @@ if prompt:
             st.caption("📎 " + " · ".join(f.name for f in user_files))
 
     if not api_key:
-        answer = "🔑 أضيفي Gemini API Key من القائمة الجانبية أولاً، ثم أرسلي الرسالة مرة أخرى."
-        messages.append({"role": "assistant", "content": answer})
-        with st.chat_message("assistant"):
-            st.warning(answer)
+        st.warning("🔑 أضيفي Gemini API Key في المربع الظاهر أعلى المحادثة، ثم أرسلي الرسالة.")
     else:
         client = make_client(api_key)
 
